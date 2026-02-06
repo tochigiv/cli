@@ -8,11 +8,11 @@ builds:
   - id: cli
     env:
       - CGO_ENABLED=0
-    mod_timestamp: '{{ .CommitTimestamp }}'
+    mod_timestamp: "{{ .CommitTimestamp }}"
     flags:
       - -trimpath
     ldflags:
-      - '-s -w'
+      - "-s -w"
       - -X github.com/databricks/cli/internal/build.buildProjectName={{ .ProjectName }}
       - -X github.com/databricks/cli/internal/build.buildVersion={{ .Version }}
 
@@ -39,9 +39,9 @@ builds:
       - arm64
     binary: databricks
 
-    hooks:
-      post:
-        - azuresigntool sign --azure-key-vault-url "https://deco-sign.vault.azure.net/" --azure-key-vault-client-id "{{ .Env.AZURE_CLIENT_ID }}" --azure-key-vault-client-secret "{{ .Env.AZURE_CLIENT_SECRET }}" --azure-key-vault-tenant-id "{{ .Env.AZURE_TENANT_ID }}" --azure-key-vault-certificate "deco-sign" --file-digest sha256 --timestamp-rfc3161 http://timestamp.digicert.com --timestamp-digest sha256 "{{ .Path }}"
+    # hooks:
+    #   post:
+    #     - azuresigntool sign --azure-key-vault-url "https://deco-sign.vault.azure.net/" --azure-key-vault-client-id "{{ .Env.AZURE_CLIENT_ID }}" --azure-key-vault-client-secret "{{ .Env.AZURE_CLIENT_SECRET }}" --azure-key-vault-tenant-id "{{ .Env.AZURE_TENANT_ID }}" --azure-key-vault-certificate "deco-sign" --file-digest sha256 --timestamp-rfc3161 http://timestamp.digicert.com --timestamp-digest sha256 "{{ .Path }}"
 
 archives:
   - formats: ["zip"]
@@ -50,18 +50,18 @@ archives:
     # Snapshot archives must have a stable file name such that the artifacts in the nightly
     # release are automatically overwritten. If the snapshot version is included in the
     # file name then additional logic to clean up older builds would be needed.
-    name_template: 'databricks_cli_{{ if not .IsSnapshot }}{{ .Version }}_{{ end }}{{ .Os }}_{{ .Arch }}'
+    name_template: "databricks_cli_{{ if not .IsSnapshot }}{{ .Version }}_{{ end }}{{ .Os }}_{{ .Arch }}"
 
 checksum:
-  name_template: 'databricks_cli_{{ .Version }}_SHA256SUMS_windows'
+  name_template: "databricks_cli_{{ .Version }}_SHA256SUMS_windows"
   algorithm: sha256
 
 snapshot:
-  version_template: '{{ incpatch .Version }}-dev+{{ .ShortCommit }}'
+  version_template: "{{ incpatch .Version }}-dev+{{ .ShortCommit }}"
 
 changelog:
   sort: asc
   filters:
     exclude:
-      - '^docs:'
-      - '^test:'
+      - "^docs:"
+      - "^test:"
