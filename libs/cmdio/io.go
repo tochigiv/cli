@@ -6,9 +6,9 @@ import (
 	"io"
 	"slices"
 	"strings"
-	"time"
+	"sync"
 
-	"github.com/briandowns/spinner"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/databricks/cli/libs/flags"
 	"github.com/manifoldco/promptui"
 )
@@ -16,6 +16,15 @@ import (
 // cmdIO is the private instance, that is not supposed to be accessed
 // outside of `cmdio` package. Use the public package-level functions
 // to access the inner state.
+//
+// Stream Architecture:
+//   - in:  stdin for user input (prompts, confirmations)
+//   - out: stdout for data output (JSON, tables, command results)
+//   - err: stderr for interactive UI (prompts, spinners, logs, diagnostics)
+//
+// This separation enables piping stdout while maintaining interactivity:
+//
+//	databricks clusters list --output json | jq  # User sees prompts, jq gets JSON
 type cmdIO struct {
 	capabilities   Capabilities
 	outputFormat   flags.Output
@@ -24,6 +33,11 @@ type cmdIO struct {
 	in             io.Reader
 	out            io.Writer
 	err            io.Writer
+
+	// Bubble Tea program lifecycle management
+	teaMu      sync.Mutex
+	teaProgram *tea.Program
+	teaDone    chan struct{}
 }
 
 func NewIO(ctx context.Context, outputFormat flags.Output, in io.Reader, out, err io.Writer, headerTemplate, template string) *cmdIO {
@@ -75,7 +89,8 @@ func (c *cmdIO) Select(items []Tuple, label string) (id string, err error) {
 			Active:   `{{.Name | bold}} ({{.Id|faint}})`,
 			Inactive: `{{.Name}}`,
 		},
-		Stdin: io.NopCloser(c.in),
+		Stdin:  io.NopCloser(c.in),
+		Stdout: nopWriteCloser{c.err},
 	}).Run()
 	if err != nil {
 		return id, err
@@ -110,6 +125,8 @@ func (c *cmdIO) Secret(label string) (value string, err error) {
 		Label:       label,
 		Mask:        '*',
 		HideEntered: true,
+		Stdin:       io.NopCloser(c.in),
+		Stdout:      nopWriteCloser{c.err},
 	})
 
 	return prompt.Run()
@@ -132,7 +149,7 @@ func Prompt(ctx context.Context) *promptui.Prompt {
 	c := fromContext(ctx)
 	return &promptui.Prompt{
 		Stdin:  io.NopCloser(c.in),
-		Stdout: nopWriteCloser{c.out},
+		Stdout: nopWriteCloser{c.err},
 	}
 }
 
@@ -141,39 +158,6 @@ func RunSelect(ctx context.Context, prompt *promptui.Select) (int, string, error
 	prompt.Stdin = io.NopCloser(c.in)
 	prompt.Stdout = nopWriteCloser{c.err}
 	return prompt.Run()
-}
-
-func (c *cmdIO) Spinner(ctx context.Context) chan string {
-	var sp *spinner.Spinner
-	if c.capabilities.SupportsInteractive() {
-		charset := spinner.CharSets[11]
-		sp = spinner.New(charset, 200*time.Millisecond,
-			spinner.WithWriter(c.err),
-			spinner.WithColor("green"))
-		sp.Start()
-	}
-	updates := make(chan string)
-	go func() {
-		if c.capabilities.SupportsInteractive() {
-			defer sp.Stop()
-		}
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case x, hasMore := <-updates:
-				if c.capabilities.SupportsInteractive() {
-					// `sp`` access is isolated to this method,
-					// so it's safe to update it from this goroutine.
-					sp.Suffix = " " + x
-				}
-				if !hasMore {
-					return
-				}
-			}
-		}
-	}()
-	return updates
 }
 
 func Spinner(ctx context.Context) chan string {
@@ -212,4 +196,45 @@ func MockDiscard(ctx context.Context) context.Context {
 		out:          io.Discard,
 		err:          io.Discard,
 	})
+}
+
+// acquireTeaProgram waits for any existing tea.Program to finish, then registers the new one.
+// This ensures only one tea.Program runs at a time (e.g., sequential spinners).
+func (c *cmdIO) acquireTeaProgram(p *tea.Program) {
+	c.teaMu.Lock()
+	defer c.teaMu.Unlock()
+
+	// Wait for existing program to finish
+	if c.teaDone != nil {
+		<-c.teaDone
+	}
+
+	// Register new program
+	c.teaProgram = p
+	c.teaDone = make(chan struct{})
+}
+
+// releaseTeaProgram signals that the current tea.Program has finished.
+func (c *cmdIO) releaseTeaProgram() {
+	c.teaMu.Lock()
+	defer c.teaMu.Unlock()
+
+	if c.teaDone != nil {
+		close(c.teaDone)
+		c.teaDone = nil
+	}
+	c.teaProgram = nil
+}
+
+// Wait blocks until any active tea.Program finishes.
+// This should be called before command termination to ensure terminal state is restored.
+func Wait(ctx context.Context) {
+	c := fromContext(ctx)
+	c.teaMu.Lock()
+	done := c.teaDone
+	c.teaMu.Unlock()
+
+	if done != nil {
+		<-done
+	}
 }

@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/databricks/cli/internal/build"
+	"github.com/databricks/cli/libs/agent"
 	"github.com/databricks/cli/libs/cmdctx"
+	"github.com/databricks/cli/libs/cmdio"
 	"github.com/databricks/cli/libs/dbr"
 	"github.com/databricks/cli/libs/log"
 	"github.com/databricks/cli/libs/telemetry"
@@ -76,8 +78,15 @@ func New(ctx context.Context) *cobra.Command {
 		ctx = withCommandInUserAgent(ctx, cmd)
 		ctx = withCommandExecIdInUserAgent(ctx)
 		ctx = withUpstreamInUserAgent(ctx)
+		ctx = withAgentInUserAgent(ctx)
 		ctx = InjectTestPidToUserAgent(ctx)
 		cmd.SetContext(ctx)
+		return nil
+	}
+
+	cmd.PersistentPostRunE = func(cmd *cobra.Command, args []string) error {
+		// Wait for any active Bubble Tea programs to finish and restore terminal state
+		cmdio.Wait(cmd.Context())
 		return nil
 	}
 
@@ -125,6 +134,9 @@ Stack Trace:
 
 	// Detect if the CLI is running on DBR and store this on the context.
 	ctx = dbr.DetectRuntime(ctx)
+
+	// Detect if the CLI is running under an agent.
+	ctx = agent.Detect(ctx)
 
 	// Set a command execution ID value in the context
 	ctx = cmdctx.GenerateExecId(ctx)
